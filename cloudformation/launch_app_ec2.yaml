@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  KeyPair:
+    Type: String
+    Default: "fgt-kp"
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+  EIPAlloc:
+    Type: String
+    Default: 'eipalloc-023afff66bfdc7849'
+
+Resources:
+  EC2RunnerAdminRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+  SSMRoleProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2RunnerAdminRole
+  TestVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref 'AWS::StackName'
+              - TestVPC
+  AppSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref TestVPC
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - '-'
+            - - !Ref 'AWS::StackName'
+              - AppSubnet
+  IG:
+    Type: AWS::EC2::InternetGateway
+  IGatt:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref IG
+      VpcId: !Ref TestVPC
+  AppSNRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TestVPC
+  AppSNRTassoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref AppSNRT
+      SubnetId: !Ref AppSubnet
+  AppSNRouteIG:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IG
+      RouteTableId: !Ref AppSNRT
+  RunnerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound HTTPS all allow
+      VpcId: !Ref TestVPC
+      SecurityGroupEgress:
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: -1
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 80
+        ToPort: 80
+        IpProtocol: tcp
+      - CidrIp: 0.0.0.0/0
+        FromPort: 22
+        ToPort: 22
+        IpProtocol: tcp
+  EC2Runner:
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: !Ref KeyPair
+      InstanceType: t2.small
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref SSMRoleProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          GroupSet:
+            - Ref: RunnerSG
+          SubnetId:
+            Ref: AppSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum update -y && yum upgrade -y
+          yum update -y aws-cfn-bootstrap
+          yum install -y docker && systemctl start docker
+          docker pull bkimminich/juice-shop
+          docker run -d -p 80:3000 bkimminich/juice-shop    
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource TestWaitCondition --region ${AWS::Region}
+      Tags:
+         - Key: Name
+           Value: JuiceAppServer
+  EC2RunnerIP:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !Ref EIPAlloc
+      InstanceId: !Ref EC2Runner
+  TestWaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+        Count: 1
+Outputs:
+  AppPublicIP:
+    Description: IP where App is accessible via port 80/http
+    Value: !GetAtt EC2Runner.PublicIp

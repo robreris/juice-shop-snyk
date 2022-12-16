@@ -1,0 +1,39 @@
+name: GitHub Actions Demo
+run-name: Github Actions Testing
+on: 
+  push:
+    branches:
+      - testbranch
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  RunFortiDevSec:
+    runs-on: self-hosted
+    steps:
+      - name: Check out repo code
+        uses: actions/checkout@v2
+      - name: Run static, sca, secrets scans 
+        run: |
+          env | grep -E "GITHUB_ACTIONS|GITHUB_RUN_NUMBER|GITHUB_REF_NAME|GITHUB_SHA" > /tmp/env
+          docker pull registry.fortidevsec.forticloud.com/fdevsec_sast:latest
+          docker run --rm --env-file /tmp/env --mount type=bind,source=${{ github.workspace }},target=/scan registry.fortidevsec.forticloud.com/fdevsec_sast:latest
+  RunSonarQube:
+    runs-on: self-hosted
+    steps:
+      - name: Check out repo code
+        uses: actions/checkout@v2
+      - name: Run static sonarqube scan
+        run: |
+          docker pull sonarqube:latest
+          docker run -d --name sonarqube -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true -p 9000:9000 sonarqube:latest
+          APP_TOKEN=$(curl -X POST -H "Content-Type: application/x-www-form-urlencoded" -d "name=test" -u admin:admin http://localhost:9000/api/user_tokens/generate | jq -r '.token')
+          IP_ADDRESS=$(docker inspect sonarqube | grep '\"IPAddress\"\:' | tail -n1 | awk -F'"' '{print $4}')
+          docker run \
+            --rm \
+            -e SONAR_HOST_URL="http://$IP_ADDRESS:9000" \
+            -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=test" \
+            -e SONAR_LOGIN=$APP_TOKEN \
+            -v "/home/robreris/GitRepos/juice-shop-snyk/:/usr/src" \
+            sonarsource/sonar-scanner-cli

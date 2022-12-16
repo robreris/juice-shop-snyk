@@ -59,3 +59,8 @@ config/*.yml
 !config/unsafe.yml
 !config/tutorial.yml
 !config/oss.yml
+
+launch_runner_params.json
+.scannerwork/*
+launch-runner-ec2.yml
+launch-runner-params.json
