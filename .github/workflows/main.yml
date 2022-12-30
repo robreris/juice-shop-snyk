@@ -24,16 +24,30 @@ jobs:
     steps:
       - name: Check out repo code
         uses: actions/checkout@v2
+      - name: Confirm workspace directory
+        run: |
+          cd ${{ github.workspace }}
+          pwd
+          ls -la
       - name: Run static sonarqube scan
         run: |
+          [ -z "$APP_TOKEN"] || unset APP_TOKEN
+          docker stop $(docker ps -aq) && docker rm $(docker ps -aq) && docker builder prune -f
           docker pull sonarqube:latest
           docker run -d --name sonarqube -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true -p 9000:9000 sonarqube:latest
-          APP_TOKEN=$(curl -X POST -H "Content-Type: application/x-www-form-urlencoded" -d "name=test" -u admin:admin http://localhost:9000/api/user_tokens/generate | jq -r '.token')
+          echo "Retrieving APP-TOKEN"
+          while [ -z "$APP_TOKEN" ] || [ "$APP_TOKEN" == "null" ] 
+          do 
+             APP_TOKEN=$(curl -s -X POST -H "Content-Type: application/x-www-form-urlencoded" -d "name=test" -u admin:admin http://127.0.0.1:9000/api/user_tokens/generate | jq -r '.token')
+          printf "."
+          sleep 1 
+          done
+          echo "APP_TOKEN retrieved, running cli..." 
           IP_ADDRESS=$(docker inspect sonarqube | grep '\"IPAddress\"\:' | tail -n1 | awk -F'"' '{print $4}')
           docker run \
             --rm \
             -e SONAR_HOST_URL="http://$IP_ADDRESS:9000" \
             -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=test" \
             -e SONAR_LOGIN=$APP_TOKEN \
-            -v "/home/robreris/GitRepos/juice-shop-snyk/:/usr/src" \
+            -v "${{ github.workspace }}:/usr/src" \
             sonarsource/sonar-scanner-cli
